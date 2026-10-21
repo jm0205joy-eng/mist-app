@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-Hant"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>保養紀錄</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0d6a85">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="保養紀錄">
+<meta name="robots" content="noindex,nofollow">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<style>
+/* 解鎖頁：公開網站上只有這一頁是明文，App 本體（app.enc）要輸入密碼才解得開 */
+:root{--bg:#eef2f0;--surface:#fff;--ink:#16201b;--muted:#5b6a62;--line:#d3dcd7;--accent:#0d6a85;--accent-ink:#fff;--warn:#a8650f;--tip:#fff6e5;
+  --sans:-apple-system,"PingFang TC","Heiti TC","Noto Sans TC","Microsoft JhengHei",sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1412;--surface:#18201c;--ink:#e6ede9;--muted:#93a39a;--line:#2b3631;
+  --accent:#53b4d0;--accent-ink:#06222b;--warn:#e0a24a;--tip:#2a2416;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1412;--surface:#18201c;--ink:#e6ede9;--muted:#93a39a;--line:#2b3631;
+  --accent:#53b4d0;--accent-ink:#06222b;--warn:#e0a24a;--tip:#2a2416;color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--sans);padding:max(32px,env(safe-area-inset-top)) 16px 32px}
+main{max-width:420px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+h1{font-size:20px;margin:0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.tip{background:var(--tip);border-color:var(--warn)}
+.tip b{color:var(--warn)}
+ol{margin:0;padding-left:1.4em}
+input{font:16px var(--sans);padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);width:100%}
+button{font:600 16px var(--sans);padding:11px;border:0;border-radius:8px;background:var(--accent);color:var(--accent-ink);width:100%}
+button:disabled{opacity:.6}
+#msg{color:var(--warn);min-height:1.6em;margin:0}
+.muted{color:var(--muted);font-size:13px;margin:0}
+</style>
+</head><body>
+<main id="lock" hidden>
+  <h1>基地保養紀錄</h1>
+  <div class="card tip" id="hint-ios" hidden>
+    <b>iPhone 第一次安裝</b>
+    <ol>
+      <li>按 Safari 下方的「分享」按鈕</li>
+      <li>選「加入主畫面」→「新增」</li>
+      <li>之後一律從主畫面的「保養紀錄」圖示開啟，並在那裡輸入密碼</li>
+    </ol>
+    <p class="muted">在 Safari 分頁裡存的資料不會帶到主畫面 App，所以請先加入主畫面再開始使用。</p>
+  </div>
+  <div class="card tip" id="hint-android" hidden>
+    <b>Android 安裝</b>
+    <button type="button" id="install" hidden>安裝到手機</button>
+    <p class="muted" id="android-menu">用 Chrome 開啟，按右上角「⋮」→「加入主畫面」或「安裝應用程式」。之後從桌面的「保養紀錄」圖示開啟。</p>
+  </div>
+  <form class="card" id="f">
+    <label for="pw">請輸入密碼</label>
+    <input type="password" id="pw" autocomplete="current-password" required>
+    <button id="go">開啟</button>
+    <p id="msg" role="status"></p>
+    <p class="muted">同一支手機只要輸入一次；之後沒有網路也能開啟。</p>
+  </form>
+</main>
+<script>
+// 包在函式裡：解鎖後用 document.open() 換成 App，全域變數會留著，避免與 App 的名稱衝突
+(() => {
+const SALT = 'aZgIKy8fkhqEnUaKnuabxQ==', ITER = 600000, KEY = 'unlockKey';
+const $ = s => document.querySelector(s);
+const enc = u8 => btoa(String.fromCharCode(...u8)), dec = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+const android = /Android/.test(navigator.userAgent);
+const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost'))
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+let prompt = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); prompt = e; $('#install').hidden = false; });
+$('#install').onclick = async () => { if (!prompt) return; prompt.prompt(); await prompt.userChoice.catch(() => {}); prompt = null; $('#install').hidden = true; };
+
+let data = null;
+const load = async () => {
+  if (!data) { const r = await fetch('app.enc'); if (!r.ok) throw new Error('net'); data = new Uint8Array(await r.arrayBuffer()); }
+  return data;
+};
+const open = async raw => {
+  const d = await load(), key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+  return new TextDecoder().decode(await crypto.subtle.decrypt({name: 'AES-GCM', iv: d.slice(0, 12)}, key, d.slice(12)));
+};
+const derive = async pw => {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw.normalize('NFC')), 'PBKDF2', false, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-256', salt: dec(SALT), iterations: ITER}, k, 256));
+};
+const launch = html => { document.open(); document.write(html); document.close(); };
+const netMsg = '第一次開啟需要網路，請連上網路後重新整理。';
+const show = msg => {
+  $('#hint-ios').hidden = !(ios && !standalone);
+  $('#hint-android').hidden = !(android && !standalone);
+  $('#msg').textContent = msg || '';
+  $('#lock').hidden = false;
+};
+
+$('#f').onsubmit = async e => {
+  e.preventDefault();
+  $('#go').disabled = true; $('#msg').textContent = '解鎖中…';
+  try {
+    const raw = await derive($('#pw').value), html = await open(raw);
+    try { localStorage.setItem(KEY, enc(raw)); } catch (x) {}
+    launch(html);
+  } catch (x) {
+    $('#msg').textContent = x.message === 'net' || x.name === 'TypeError' ? netMsg : '密碼不正確，請再試一次。';
+    $('#go').disabled = false;
+  }
+};
+
+(async () => {
+  let saved = null; try { saved = localStorage.getItem(KEY); } catch (x) {}
+  if (!saved) return show();
+  try { launch(await open(dec(saved))); }
+  catch (x) {
+    if (x.message === 'net' || x.name === 'TypeError') return show(netMsg);
+    try { localStorage.removeItem(KEY); } catch (y) {}
+    show('密碼已更換，請輸入新密碼。');
+  }
+})();
+})();
+</script>
+</body></html>
